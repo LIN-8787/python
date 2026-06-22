@@ -13,10 +13,20 @@ from google.genai import Client
 # ⚙️ 1. 設定 Tesseract OCR 執行檔路徑 (必須在最頂端執行)
 # ==============================================================================
 tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 if os.path.exists(tesseract_path):
+    # 如果是您自己的 Windows 電腦，會走這裡並成功指定路徑
     pytesseract.pytesseract.tesseract_cmd = tesseract_path
 else:
-    st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認是否已下載並安裝於 C:\\Program Files\\Tesseract-OCR\\")
+    # 如果是 Streamlit 雲端伺服器，因為找不到 C 槽，會走這裡
+    # 我們不報錯，而是嘗試讓系統自動尋找 Linux 內建的 tesseract
+    try:
+        # 測試看看系統能不能直接執行 tesseract
+        pytesseract.get_tesseract_version()
+    except pytesseract.TesseractNotFoundError:
+        # 只有當雲端和在地都完全找不到時，才噴出錯誤訊息
+        st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認環境中是否已安裝 Tesseract。")
+
 
 
 # ==============================================================================
