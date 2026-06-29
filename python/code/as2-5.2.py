@@ -10,7 +10,7 @@ from google import genai
 from google.genai import Client
 
 # ==============================================================================
-# ⚙️ 1. 設定 Tesseract OCR 執行檔路徑 (必須在最頂端執行)
+# ⚙️ 設定 Tesseract OCR 執行檔路徑 (必須在最頂端執行)
 # ==============================================================================
 tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
