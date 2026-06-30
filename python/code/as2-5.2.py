@@ -13,31 +13,22 @@ from google.genai import Client
 #  設定 Tesseract OCR 執行檔路徑 
 # ==============================================================================
 tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
 if os.path.exists(tesseract_path):
-    # 如果是您自己的 Windows 電腦，會走這裡並成功指定路徑
     pytesseract.pytesseract.tesseract_cmd = tesseract_path
 else:
-    # 如果是 Streamlit 雲端伺服器，因為找不到 C 槽，會走這裡
-    # 我們不報錯，而是嘗試讓系統自動尋找 Linux 內建的 tesseract
-    try:
-        # 測試看看系統能不能直接執行 tesseract
-        pytesseract.get_tesseract_version()
-    except pytesseract.TesseractNotFoundError:
-        # 只有當雲端和在地都完全找不到時，才噴出錯誤訊息
-        st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認環境中是否已安裝 Tesseract。")
+    st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認是否已下載並安裝於 C:\\Program Files\\Tesseract-OCR\\")
 
 # ==============================================================================
 #  設定 Gemini API KEY
 # ==============================================================================
 # 您可以直接將 API Key 貼在下方引號中，或設定為環境變數
-if "VLM_API_KEY" in st.secrets:
-    GEMINI_API_KEY = st.secrets["VLM_API_KEY"]
-else:
-    GEMINI_API_KEY = "PLEASE_SET_KEY_IN_STREAMLIT_CLOUD"
+GEMINI_API_KEY = "AQ.Ab8RN6Lbao7OTLaBCrNcxDB8kKowwPTqOeo89f_-VmV6qwrC-A"
 
+if not GEMINI_API_KEY or GEMINI_API_KEY == "AQ.您的真實金鑰貼在這裡":
+    st.warning("⚠️ 請先在程式碼頂端填入您的 GEMINI_API_KEY 才能啟動大模型辨識！")
 
 def get_gemini_client():
+    # 這裡必須跟著使用上面的變數名稱 GEMINI_API_KEY
     return Client(api_key=GEMINI_API_KEY)
 
 
