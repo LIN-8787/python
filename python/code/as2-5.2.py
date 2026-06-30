@@ -10,25 +10,36 @@ from google import genai
 from google.genai import Client
 
 # ==============================================================================
-#  設定 Tesseract OCR 執行檔路徑 
+# ⚙️ 設定 Tesseract OCR 執行檔路徑 (必須在最頂端執行)
 # ==============================================================================
 tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 if os.path.exists(tesseract_path):
+    # 如果是您自己的 Windows 電腦，會走這裡並成功指定路徑
     pytesseract.pytesseract.tesseract_cmd = tesseract_path
 else:
-    st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認是否已下載並安裝於 C:\\Program Files\\Tesseract-OCR\\")
+    # 如果是 Streamlit 雲端伺服器，因為找不到 C 槽，會走這裡
+    # 我們不報錯，而是嘗試讓系統自動尋找 Linux 內建的 tesseract
+    try:
+        # 測試看看系統能不能直接執行 tesseract
+        pytesseract.get_tesseract_version()
+    except pytesseract.TesseractNotFoundError:
+        # 只有當雲端和在地都完全找不到時，才噴出錯誤訊息
+        st.error("❌ 系統找不到 Tesseract OCR 引擎！請確認環境中是否已安裝 Tesseract。")
+
+
 
 # ==============================================================================
-#  設定 Gemini API KEY
+# ⚙️ 設定 Gemini API KEY (如果要從這邊直接開啟，要把API_KEY直接打在這)
 # ==============================================================================
 # 您可以直接將 API Key 貼在下方引號中，或設定為環境變數
-GEMINI_API_KEY = "AQ.Ab8RN6Lbao7OTLaBCrNcxDB8kKowwPTqOeo89f_-VmV6qwrC-A"
+if "VLM_API_KEY" in st.secrets:
+    GEMINI_API_KEY = st.secrets["VLM_API_KEY"]
+else:
+    GEMINI_API_KEY = "PLEASE_SET_KEY_IN_STREAMLIT_CLOUD"
 
-if not GEMINI_API_KEY or GEMINI_API_KEY == "AQ.您的真實金鑰貼在這裡":
-    st.warning("⚠️ 請先在程式碼頂端填入您的 GEMINI_API_KEY 才能啟動大模型辨識！")
 
 def get_gemini_client():
-    # 這裡必須跟著使用上面的變數名稱 GEMINI_API_KEY
     return Client(api_key=GEMINI_API_KEY)
 
 
@@ -69,7 +80,7 @@ def scan_image_with_vlm(image):
         # 將模型名稱確實升級為最新的 'gemini-2.5-flash'
         response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[image, prompt] # 此處會完美撈取到上方定義好的 prompt
+            contents=[image, prompt] # 此處會撈取到上方定義好的 prompt
         )
         
         json_text = response.text.strip()
@@ -119,19 +130,6 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
         if not line or "=" not in line or line.upper().startswith("V="):
             continue
 
-        # 在所有解析之前，只要發現數值開頭是 0 歐姆
-        # 不論是 =0_、=0R_ 還是 =0OHM_，直接在原始字串就把它掉包成 0.002！
-        line_upper = line.upper()
-        if "=0_" in line_upper:
-            line = line.replace("=0_", "=0.002_")
-        elif "=0R_" in line_upper:
-            line = line.replace("=0R_", "=0.002_")
-        elif "=0OHM_" in line_upper:
-            line = line.replace("=0OHM_", "=0.002_")
-        elif "=NL/0_" in line_upper:
-            line = line.replace("=NL/0_", "=0.002_")
-
-        # 掉包完成後，才進行原本的拆分
         name, spec = line.split('=', 1)
         name = name.strip().upper()
         clean_spec = spec.upper().strip()
@@ -139,36 +137,31 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
         # 先用底線切開所有區塊
         parts = clean_spec.split('_')
         
-        # 3 條底線特徵限制
         if len(parts) >= 3:
-            raw_val = parts[0].replace("1%", "").replace("5%", "").strip()
+            # 修正 parts.replace 錯誤，精確指定 parts[0]
+            raw_val = parts[0].replace("NL/", "").replace("1%", "").replace("5%", "").strip()
             
             # 防止 +V5_SB 被底線切碎的縫合機制
+            # 如果最後一個區塊是 'SB'，代表完整的電壓名稱被切斷了，必須要把倒數兩個區塊重新接回來！
             if parts[-1].strip() == "SB" and len(parts) >= 4:
-                raw_volt_name = "_".join(parts[-2:]).strip() 
-                raw_power = "_".join(parts[1:-2]).strip()   
+                raw_volt_name = "_".join(parts[-2:]).strip() # 重新接回 "+V5_SB"
+                raw_power = "_".join(parts[1:-2]).strip()   # 中間留給功率
             else:
-                raw_volt_name = parts[-1].strip()            
-                raw_power = "_".join(parts[1:-1]).strip()    
+                raw_volt_name = parts[-1].strip()            # 正常情況：最後一個就是電壓
+                raw_power = "_".join(parts[1:-1]).strip()    # 中間留給功率
             
-            # ========================================================
-            # 💡 步驟一：精準提取電壓 (V) 
-            # ========================================================
-            if "+V5_SB" in raw_volt_name:
-                voltage_used = 5.0
-            elif "+V3.3SB" in raw_volt_name or "+V3.3 SB" in raw_volt_name:
-                voltage_used = 3.3
-            else:
-                v_num_match = re.search(r'(\d+(?:\.\d+)?)', raw_volt_name)
-                if v_num_match:
-                    voltage_used = float(v_num_match.group(1))
-                else:
-                    voltage_used = fallback_voltage
+            # ---- 💡 數值提取一：阻值換算純歐姆 (R) ----
+            val_match = re.search(r'(\d+(?:\.\d+)?)\s*([KkMm𝛀𝛺R]?)', raw_val)
+            if not val_match:
+                continue
+            val_num = float(val_match.group(1))
+            unit = val_match.group(2)
+            if 'K' in unit: val_num *= 1000
+            elif 'M' in unit: val_num *= 1000000
 
-            # ========================================================
-            # 💡 步驟二：額定最大功率 (PMAX) 提取
-            # ========================================================
-            p_max = 0.0625 
+            # ---- 💡 數值提取二：額定最大功率 (PMAX) ----
+            p_max = 0.25 # 預設值
+            # 支援 1/16W 或 1_16W 形式
             p_match_slash = re.search(r'(\d+)/(\d+)', raw_power)
             p_match_under = re.search(r'(\d+)_(\d+)', raw_power)
             
@@ -181,63 +174,41 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
                 if p_num_match:
                     p_max = float(p_num_match.group(1))
 
-            # 🛠️ 功率安全熔斷
-            if p_max <= 0:
-                p_max = 0.0625
-
-            # ========================================================
-            # 💡 步驟三：阻值換算純歐姆 (R)
-            # ========================================================
-            clean_val_str = raw_val.replace("NL/", "").strip()
-
-            val_match = re.search(r'(\d+(?:\.\d+)?)', clean_val_str)
-            if not val_match:
-                continue
-            
-            val_num = float(val_match.group(1))
-            if 'K' in clean_val_str: val_num *= 1000
-            elif 'M' in clean_val_str: val_num *= 1000000
-
-            # 把 0 掉變成 0.002 ，這裡如果 val_num 還是 <= 0.002，就絕對是跳線！
-            if val_num <= 0.002:
-                val_num = 0.002
-                is_jumper = True
+            # ---- 💡 數值提取三：精準提取電壓 (V) ----
+            # 此時 raw_volt_name 已被完美縫合，可精準辨識特規字串
+            if "+V5_SB" in raw_volt_name:
+                voltage_used = 5.0
+            elif "+V3.3SB" in raw_volt_name or "+V3.3 SB" in raw_volt_name:
+                voltage_used = 3.3
             else:
-                is_jumper = False
+                # 普通電壓字串（如 5V, 3.3V）提取其中的數字
+                v_num_match = re.search(r'(\d+(?:\.\d+)?)', raw_volt_name)
+                if v_num_match:
+                    voltage_used = float(v_num_match.group(1))
+                else:
+                    voltage_used = fallback_voltage
 
-            # ========================================================
-            # 💡 步驟四：核心降額公式計算 
-            # ========================================================
-            if is_jumper:
-                p_act = (voltage_used ** 2) / val_num  # 分母絕對是 0.002！
-                p_act_display = 0.0                    
-                stress_ratio = 0.0
-                is_pass = True
-            else:
-                p_act = (voltage_used ** 2) / val_num
-                p_act_display = p_act
-                stress_ratio = p_act / p_max
-                is_pass = stress_ratio <= derating_target
+            # ---- 💡 核心降額公式計算 ----
+            p_act = (voltage_used ** 2) / val_num
+            stress_ratio = p_act / p_max
+            is_pass = stress_ratio <= derating_target
 
-            # ========================================================
-            # 💡 步驟五：包裝結果回傳
-            # ========================================================
             results.append({
                 "name": name,
-                "r_value": 0.0 if is_jumper else val_num, 
-                "calc_r_value": val_num,                  
-                "voltage_used": voltage_used, 
-                "p_act": p_act_display,
+                "r_value": val_num,
+                "voltage_name_raw": raw_volt_name,
+                "voltage_used": voltage_used,
+                "p_act": p_act,
                 "p_max": p_max,
                 "stress_ratio": stress_ratio,
-                "is_pass": is_pass,
-                "is_jumper": is_jumper  
+                "is_pass": is_pass
             })
 
     return results
 
+
 # ==============================================================================
-#  獨立計算公式程式 (從文字行內抽離各自電壓進行 Pact 計算)
+#  獨立計算公式程式 (從文字行抽離各自電壓進行 Pact 計算)
 # ==============================================================================
 def calculate_derating_metrics(user_text, derating_target=0.80):
     lines = user_text.split('\n')
@@ -262,7 +233,7 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
         name = name.strip().upper()
         clean_spec = spec.upper().strip()
 
-        # 將複雜字串依底線切開，最尾端的一定是電壓相關資訊
+        # 💡 【核心優化 1】：將複雜字串依底線切開，最尾端的一定是電壓相關資訊
         parts = clean_spec.split('_')
         if len(parts) < 2:
             continue  # 格式不符則跳過
@@ -277,7 +248,7 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
             raw_volt_part = parts[-1]
             remaining_spec = "_".join(parts[:-1])
 
-        # 提取電壓數字
+        # 🚀 精準提取電壓數字
         voltage_used = None
         v_num_match = re.search(r'(\d+(?:\.\d+)?)', raw_volt_part)
         if v_num_match:
@@ -288,8 +259,8 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
         # 主動抹除剩餘字串中的 NL/ 與 1%/5% 精度干擾
         remaining_spec = remaining_spec.replace("NL/", "").replace("1%", "").replace("5%", "").strip()
 
-        # 精準提取功率 (PMAX) 
-        p_max = 0.0625  # 預設 1/16W
+        # 💡 【核心優化 2】：精準提取功率 (PMAX) 
+        p_max = 0.25  # 預設 1/4W
         
         # 支援 1/16W, 1/8W 或 1_16W 的形式
         p_match = re.search(r'(\d+)\s*/\s*(\d+)\s*[WW]?', remaining_spec)
@@ -308,7 +279,7 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
                 p_max = float(p_num_match.group(1))
                 remaining_spec = re.sub(r'(\d+(?:\.\d+)?)\s*[WW]', '', remaining_spec).strip()
 
-        # 提取阻值 (R)
+        # 💡 【核心優化 3】：提取阻值 (R)
         # 此時 remaining_spec 裡只剩下阻值字串了（例如 "100K" 或 "1K"）
         val_match = re.search(r'(\d+(?:\.\d+)?)\s*([KkMm𝛀𝛺R]?)', remaining_spec)
         if not val_match:
@@ -319,38 +290,19 @@ def calculate_derating_metrics(user_text, derating_target=0.80):
         if 'K' in unit: val_num *= 1000
         elif 'M' in unit: val_num *= 1000000
 
-        # ==============================================================================
-        #  0歐姆
-        # ==============================================================================
-        if val_num == 0 or "0 OHM" in clean_spec or "0OHM" in clean_spec or "NL/0" in clean_spec or "0R" in remaining_spec:
-            val_num = 0.002   # 要求的 0.002 Ω，確保分母大於 0
-            is_jumper = True
-        else:
-            is_jumper = False
-
-        if is_jumper:
-            # 導線跳線：使用 0.002Ω 算真實微小功耗，但最終前台應力與呈現歸 0 漂亮過關
-            p_act = (voltage_used ** 2) / val_num  # 這裡的分母現在是 0.002，百分之百安全！
-            p_act_display = 0.0                    # 前台顯示功耗歸零
-            stress_ratio = 0.0
-            is_pass = True
-        else:
-            # 普通正常電阻計算
-            p_act = (voltage_used ** 2) / val_num
-            p_act_display = p_act
-            stress_ratio = p_act / p_max
-            is_pass = stress_ratio <= derating_target
+        # 降額核心計算
+        p_act = (voltage_used ** 2) / val_num
+        stress_ratio = p_act / p_max
+        is_pass = stress_ratio <= derating_target
 
         results.append({
             "name": name,
-            "r_value": 0.0 if is_jumper else val_num, 
-            "calc_r_value": val_num,                  # 提供前台 code 算式印出 0.002
+            "r_value": val_num,
             "voltage_used": voltage_used, 
-            "p_act": p_act_display,
+            "p_act": p_act,
             "p_max": p_max,
             "stress_ratio": stress_ratio,
-            "is_pass": is_pass,
-            "is_jumper": is_jumper  
+            "is_pass": is_pass
         })
 
     return results
@@ -372,11 +324,11 @@ with col1:
     st.header("Step 1：上傳電路圖")
     uploaded_file = st.file_uploader("請上傳或拖曳圖片...", type=["png", "jpg", "jpeg"])
     
-    if uploaded_file: 
+    if uploaded_file:
         image = Image.open(uploaded_file)
         st.image(image, caption="已讀取電路圖", use_container_width=True)
         
-        st.header("Step 2：辨識結果")
+        st.header("Step 2：AI 視覺邏輯辨識結果")
         
         # 觸發 VLM 智慧掃描辨識
         if "clean_ocr_output" not in st.session_state or st.button("🚀 重新啟動圖片分析"):
@@ -391,7 +343,7 @@ with col1:
             "元件與電壓清單 (若有小誤差可手動修改)：",
             value=st.session_state.realtime_user_text,
             height=250,
-            key="realtime_user_text"  # 加上固定 key，由 st.session_state 主導管理
+            key="realtime_user_text"  # 🔑 加上固定 key，由 st.session_state 主導管理
         )
 
 with col2:
@@ -402,10 +354,10 @@ with col2:
                 # 從安全初始化後的狀態中提取即時文字
                 current_text = st.session_state.realtime_user_text
                 
-                # 呼叫計算核心
+                # 呼叫已經除錯修正（零件陣列索引已修復）的計算核心
                 report_card = calculate_derating_metrics(current_text, DERATING_TARGET)
                 
-                st.success("✅ 計算完成！")
+                st.success("✅ 文字檔內部數值分流判定完成！")
                 st.write("---")
                 
                 if not report_card:
@@ -415,49 +367,26 @@ with col2:
                 for component in report_card:
                     st.subheader(f"🔍 元件： {component['name']}")
                     
-                    this_r_voltage = component.get('voltage_used', 3.3)
+                    # 抓取該元件在文字框內拆出的電壓
+                    this_r_voltage = component['voltage_used']
+                    
+                    # 印出各自跳轉的電壓與數值
                     st.info(f"工作電壓： `{this_r_voltage:.1f} V`")
-
-                    # 💡 提取前端即將用來顯示或可能引爆除法的變數
-                    r_val = float(component.get('r_value', 0.0))
-                    p_max = float(component.get('p_max', 0.0625))
-                    p_act = float(component.get('p_act', 0.0))
+                    st.markdown(f"* **電阻值 (R)**： `{component['r_value']:.1f} Ω` ")
+                    st.markdown(f"* **量測工作功耗 (Pact)**： `{component['p_act']:.6f} W` ")
+                    st.markdown(f"* **額定最大功率 (Pmax)**： `{component['p_max']:.4f} W` ")
                     
-                    # 🚀 檢查是否為跳線，或者「分母是否不幸包含任何0」
-                    if component.get('is_jumper', False) or r_val <= 0 or p_max <= 0:
-                        # 🔌 只要發現任何一個分母是 0，或者標記為跳線，100% 封鎖原本有毒的算式！
-                        st.markdown(f"* **阻值 (R)**： `0.0 Ω` (jump)")
-                        st.markdown(f"* **量測工作功耗 (Pact)**： `0.000000 W` ")
-                        st.markdown(f"* **額定最大功率 (PMAX)**： `{p_max if p_max > 0 else 0.0625:.4f} W` ")
-                        
-                        st.markdown(f"* **Pact/Pmax計算 (V² / R / Pmax)**：")
-                        # 📝 這裡全部用純文字印出，絕對不執行任何代數除法，除以零的錯誤在全宇宙都不可能發生！
-                        st.code(f"({this_r_voltage:.1f}V)² / 0.002Ω (0歐姆) = 0.0000")
-                        st.markdown(f"* **Pact/Pmax**： `0.0%` (降額標準: {DERATING_TARGET*100}%)")
-                        st.success(f"🟢 **PASS (0歐姆跳線)**")
+                    # 算式呈現，完美各自跳轉代入數值
+                    st.markdown(f"* **Pact/Pmax計算 (V² / R / Pmax)**：")
+                    st.code(f"({this_r_voltage:.1f}V)² / {component['r_value']:.0f}Ω / {component['p_max']:.4f}W = {component['stress_ratio']:.4f}")
+                    st.markdown(f"* ****： `{component['stress_ratio']*100:.1f}%` (Derating標準: {DERATING_TARGET*100}%)")
                     
+                    if component['is_pass']:
+                        st.success(f"🟢 **PASS (符合Derating標準)**")
                     else:
-                        # 🔒 只有在阻值大於0、且最大功率大於0的絕對安全狀態下，才放行跑正常電阻顯示
-                        st.markdown(f"* **電阻值 (R)**： `{r_val:.1f} Ω` ")
-                        st.markdown(f"* **量測工作功耗 (Pact)**： `{p_act:.6f} W` ")
-                        st.markdown(f"* **額定最大功率 (Pmax)**： `{p_max:.4f} W` ")
-                    
-                        st.markdown(f"* **Pact/Pmax計算 (V² / R / Pmax)**：")
-                        
-                        # 在執行字串格式化列印前，做前端最後的雙重除法安全檢查
-                        safe_stress_ratio = component.get('stress_ratio', 0.0)
-                        
-                        st.code(f"({this_r_voltage:.1f}V)² / {r_val:.0f}Ω / {p_max:.4f}W = {safe_stress_ratio:.4f}")
-                        st.markdown(f"* **Pact/Pmax**： `{safe_stress_ratio*100:.1f}%` (Derating標準: {DERATING_TARGET*100}%)")
-                        
-                        if component.get('is_pass', False):
-                            st.success(f"🟢 **PASS (符合Derating標準)**")
-                        else:
-                            st.error(f"❌ **FAIL (未通過Derating標準)**")
-                            
+                        st.error(f"❌ **FAIL (未通過Derating標準)**")
                     st.write("---")
                     
             except Exception as e:
-                # 🛠️ 萬一有其他我們沒想到的未知除法死角，把當機壓制住，改成印出貼心提示
-                st.error(f"計算過程中有元件阻值或功率異常（含有 0 值），已被系統安全熔斷隔離。")
+                st.error(f"計算失敗，請檢查輸入格式。")
                 st.code(f"錯誤報告: {e}")
