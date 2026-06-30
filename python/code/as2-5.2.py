@@ -33,14 +33,15 @@ else:
 # ⚙️ 設定 Gemini API KEY (如果要從這邊直接開啟，要把API_KEY直接打在這)
 # ==============================================================================
 # 您可以直接將 API Key 貼在下方引號中，或設定為環境變數
-if "VLM_API_KEY" in st.secrets:
-    GEMINI_API_KEY = st.secrets["VLM_API_KEY"]
-else:
-    GEMINI_API_KEY = "PLEASE_SET_KEY_IN_STREAMLIT_CLOUD"
+GEMINI_API_KEY = "AQ.Ab8RN6Lbao7OTLaBCrNcxDB8kKowwPTqOeo89f_-VmV6qwrC-A"
 
+if not GEMINI_API_KEY or GEMINI_API_KEY == "AQ.您的真實金鑰貼在這裡":
+    st.warning("⚠️ 請先在程式碼頂端填入您的 GEMINI_API_KEY 才能啟動大模型辨識！")
 
 def get_gemini_client():
+    # 這裡必須跟著使用上面的變數名稱 GEMINI_API_KEY
     return Client(api_key=GEMINI_API_KEY)
+
 
 
 # ==============================================================================
